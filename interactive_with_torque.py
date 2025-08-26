@@ -155,7 +155,7 @@ def main():
     drone = scene.add_entity(
         morph=gs.morphs.Drone(
             file="urdf/custom.urdf",
-            # pos=(0.0, 0, 0.5),  # Start a bit higher
+            pos=(0.0, 0, 0.5),  # Start a bit higher
         ),
     )
 

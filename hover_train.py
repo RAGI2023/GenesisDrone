@@ -113,8 +113,16 @@ def get_cfgs():
         "pos_y_range": [-1.0, 1.0],
         "pos_z_range": [1.0, 1.0],
     }
+    wind_cfg = {
+        "max_value": 0.0, # m/s
+        "min_value": 0.0,
+        "update_step": 10,
+        "alpha": 0.5, # exponential smoothing
+        "seed": 1,
+        "allow_vertical_wind": False
+    }
 
-    return env_cfg, obs_cfg, reward_cfg, command_cfg
+    return env_cfg, obs_cfg, reward_cfg, command_cfg, wind_cfg
 
 
 def main():
@@ -123,12 +131,13 @@ def main():
     parser.add_argument("-v", "--vis", action="store_true", default=False)
     parser.add_argument("-B", "--num_envs", type=int, default=8192)
     parser.add_argument("--max_iterations", type=int, default=301)
+    parser.add_argument("--log_level", type=str, default="warning")
     args = parser.parse_args()
 
-    gs.init(logging_level="warning")
+    gs.init(logging_level=args.log_level)
 
     log_dir = f"logs/{args.exp_name}"
-    env_cfg, obs_cfg, reward_cfg, command_cfg = get_cfgs()
+    env_cfg, obs_cfg, reward_cfg, command_cfg, wind_cfg = get_cfgs()
     train_cfg = get_train_cfg(args.exp_name, args.max_iterations)
 
     if os.path.exists(log_dir):
@@ -139,7 +148,7 @@ def main():
         env_cfg["visualize_target"] = True
 
     pickle.dump(
-        [env_cfg, obs_cfg, reward_cfg, command_cfg, train_cfg],
+        [env_cfg, obs_cfg, reward_cfg, command_cfg, train_cfg, wind_cfg],
         open(f"{log_dir}/cfgs.pkl", "wb"),
     )
 
@@ -149,6 +158,7 @@ def main():
         obs_cfg=obs_cfg,
         reward_cfg=reward_cfg,
         command_cfg=command_cfg,
+        wind_cfg=wind_cfg,
         show_viewer=args.vis,
     )
 

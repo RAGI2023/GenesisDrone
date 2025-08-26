@@ -2,6 +2,8 @@ import torch
 import math
 import copy
 import genesis as gs
+from genesis.engine.solvers.rigid.rigid_solver_decomp import RigidSolver
+
 from genesis.utils.geom import (
     quat_to_xyz,
     transform_by_quat,
@@ -15,7 +17,7 @@ def gs_rand_float(lower, upper, shape, device):
 
 
 class HoverEnv:
-    def __init__(self, num_envs, env_cfg, obs_cfg, reward_cfg, command_cfg, show_viewer=False):
+    def __init__(self, num_envs, env_cfg, obs_cfg, reward_cfg, command_cfg, wind_cfg, show_viewer=False):
         self.num_envs = num_envs
         self.rendered_env_num = min(10, self.num_envs)
         self.num_obs = obs_cfg["num_obs"]
@@ -32,6 +34,9 @@ class HoverEnv:
         self.obs_cfg = obs_cfg
         self.reward_cfg = reward_cfg
         self.command_cfg = command_cfg
+        self.wind_cfg = wind_cfg
+
+        self.step_count = 0
 
         self.obs_scales = obs_cfg["obs_scales"]
         self.reward_scales = copy.deepcopy(reward_cfg["reward_scales"])
@@ -71,6 +76,7 @@ class HoverEnv:
                     diffuse_texture=gs.textures.ColorTexture(
                         color=(1.0, 0.5, 0.5),
                     ),
+                    vis_mode='visual',
                 ),
             )
         else:
@@ -90,7 +96,7 @@ class HoverEnv:
         self.base_init_pos = torch.tensor(self.env_cfg["base_init_pos"], device=gs.device)
         self.base_init_quat = torch.tensor(self.env_cfg["base_init_quat"], device=gs.device)
         self.inv_base_init_quat = inv_quat(self.base_init_quat)
-        self.drone = self.scene.add_entity(gs.morphs.Drone(file="urdf/drones/cf2x.urdf"))
+        self.drone = self.scene.add_entity(gs.morphs.Drone(file="urdf/cf2x.urdf"))
 
         # build scene
         self.scene.build(n_envs=num_envs)
@@ -133,6 +139,72 @@ class HoverEnv:
             .reshape((-1,))
         )
 
+    def _generate_new_wind(self):
+        """
+        Generate wind forces using exponential smoothing based on wind_cfg
+        Optimized for parallel environments using pure torch operations
+        Returns wind force tensor [num_envs, 3] in m/s
+        """
+        # Initialize wind generator and last_wind tensor on first call
+        with torch.no_grad():
+            if not hasattr(self, '_wind_generator'):
+                self._wind_generator = torch.Generator(device=self.device)
+                self._wind_generator.manual_seed(self.wind_cfg["seed"])
+                
+                # Convert last_wind to tensor for all environments
+                self.cur_wind = torch.zeros((self.num_envs, 3), device=self.device, dtype=gs.tc_float)
+            
+            # Generate random wind components for all environments simultaneously
+            wind_range = self.wind_cfg["max_value"] - self.wind_cfg["min_value"]
+            
+            # Generate base wind magnitudes [num_envs, 3]
+            random_values = torch.rand((self.num_envs, 3), generator=self._wind_generator, device=self.device)
+            new_wind = random_values * wind_range + self.wind_cfg["min_value"]
+            
+            # Add random directions (50% chance for negative values)
+            direction_mask = torch.rand((self.num_envs, 3), generator=self._wind_generator, device=self.device) < 0.5
+            new_wind = torch.where(direction_mask, -new_wind, new_wind)
+            
+            # Handle vertical wind constraint
+            if not self.wind_cfg["allow_vertical_wind"]:
+                new_wind[:, 2] = 0.0
+            
+            # Apply exponential smoothing: new_wind = alpha * new_value + (1 - alpha) * old_value
+            alpha = self.wind_cfg["alpha"]
+            self.cur_wind = alpha * new_wind + (1 - alpha) * self.cur_wind
+            self.cur_wind = self.cur_wind.detach()  # Detach to prevent gradient tracking
+        
+    def _wind_2_force(self) -> torch.Tensor:
+        """
+        Convert wind speed (m/s) to force (N) applied on the drone
+        Using drag equation: F = 0.5 * rho * v^2 * Cd * A
+        Assuming:
+            - Air density rho = 1.225 kg/m^3 (at sea level)
+            - Drag coefficient Cd = 1.0 (approximation for small drones)
+            - Reference area A = 0.1 m^2 (approximation for small drones)
+        Returns force tensor [num_envs, 3] in Newtons
+        """
+        rho = 1.225
+        Cd = 1.0
+        A = 0.1
+        v = self.cur_wind  # [num_envs, 3]
+        
+        # 修正：计算力的大小和方向
+        wind_speed = torch.norm(v, dim=1, keepdim=True)  # [num_envs, 1]
+        wind_speed_safe = torch.clamp(wind_speed, min=1e-6)
+        force_magnitude = 0.5 * rho * wind_speed**2 * Cd * A  # [num_envs, 1]
+        wind_direction = v / wind_speed_safe  # [num_envs, 3]
+        force = force_magnitude * wind_direction  # [num_envs, 3]
+        
+        # 确保形状正确 - 移除可能的额外维度
+        force = force.squeeze()  # 移除大小为1的维度
+
+        
+        # 调试输出（可选，用于排查问题）
+        # print(f"force shape: {force.shape}, wind shape, {self.cur_wind.shape} expected: [{self.num_envs}, 3]")
+        
+        return force.detach()
+
     def step(self, actions):
         self.actions = torch.clip(actions, -self.env_cfg["clip_actions"], self.env_cfg["clip_actions"])
         exec_actions = self.actions
@@ -142,6 +214,23 @@ class HoverEnv:
         # update target pos
         if self.target is not None:
             self.target.set_pos(self.commands, zero_velocity=True)
+
+        if not self.step_count % self.wind_cfg["update_step"]:
+            self._generate_new_wind()
+            # print("New Wind")
+        self.step_count += 1
+        
+        force = self._wind_2_force()
+        force = force.detach()
+        force = force.view(self.num_envs, 1, 3)
+        links_idx = torch.tensor([1], dtype=torch.int32, device=gs.device)
+
+        envs_idx = torch.arange(self.scene.n_envs, device=gs.device)  # 明确指定环境索引
+
+        # print(f"force shape{force.shape}, link shape {len(links_idx)}, envs num {self.scene.n_envs}")
+
+        self.scene.sim.rigid_solver.apply_links_external_force(force=force, links_idx=links_idx, envs_idx=envs_idx)
+
         self.scene.step()
 
         # update buffers
