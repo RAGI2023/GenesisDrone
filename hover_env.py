@@ -114,6 +114,8 @@ class HoverEnv:
         self.reset_buf = torch.ones((self.num_envs,), device=gs.device, dtype=gs.tc_int)
         self.episode_length_buf = torch.zeros((self.num_envs,), device=gs.device, dtype=gs.tc_int)
         self.commands = torch.zeros((self.num_envs, self.num_commands), device=gs.device, dtype=gs.tc_float)
+        if self.env_cfg["fix_target"]:
+            self.commands[:] = torch.tensor([0.0, 0.0, 1.0], device=gs.device)
 
         self.actions = torch.zeros((self.num_envs, self.num_actions), device=gs.device, dtype=gs.tc_float)
         self.last_actions = torch.zeros_like(self.actions)
@@ -128,6 +130,9 @@ class HoverEnv:
         self.extras["observations"] = dict()
 
     def _resample_commands(self, envs_idx):
+        if self.env_cfg["fix_target"]:
+            self.commands[:] = torch.tensor([0.0, 0.0, 1.0], device=gs.device)
+            return
         self.commands[envs_idx, 0] = gs_rand_float(*self.command_cfg["pos_x_range"], (len(envs_idx),), gs.device)
         self.commands[envs_idx, 1] = gs_rand_float(*self.command_cfg["pos_y_range"], (len(envs_idx),), gs.device)
         self.commands[envs_idx, 2] = gs_rand_float(*self.command_cfg["pos_z_range"], (len(envs_idx),), gs.device)
@@ -223,7 +228,7 @@ class HoverEnv:
         force = self._wind_2_force()
         force = force.detach()
         force = force.view(self.num_envs, 1, 3)
-        links_idx = torch.tensor([1], dtype=torch.int32, device=gs.device)
+        links_idx = torch.tensor([2], dtype=torch.int32, device=gs.device)
 
         envs_idx = torch.arange(self.scene.n_envs, device=gs.device)  # 明确指定环境索引
 
@@ -252,9 +257,10 @@ class HoverEnv:
         self.base_lin_vel[:] = transform_by_quat(self.drone.get_vel(), inv_base_quat)
         self.base_ang_vel[:] = transform_by_quat(self.drone.get_ang(), inv_base_quat)
 
-        # resample commands
-        envs_idx = self._at_target()
-        self._resample_commands(envs_idx)
+        if not self.env_cfg["fix_target"]:
+            # resample commands
+            envs_idx = self._at_target()
+            self._resample_commands(envs_idx)
 
         # check termination and reset
         self.crash_condition = (

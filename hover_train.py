@@ -88,6 +88,7 @@ def get_cfgs():
         "visualize_target": False,
         "visualize_camera": False,
         "max_visualize_FPS": 60,
+        "fix_target": True,
     }
     obs_cfg = {
         "num_obs": 17,
@@ -114,10 +115,10 @@ def get_cfgs():
         "pos_z_range": [1.0, 1.0],
     }
     wind_cfg = {
-        "max_value": 0.0, # m/s
+        "max_value": 10.0, # m/s
         "min_value": 0.0,
         "update_step": 10,
-        "alpha": 0.5, # exponential smoothing
+        "alpha": 0.1, # exponential smoothing
         "seed": 1,
         "allow_vertical_wind": False
     }

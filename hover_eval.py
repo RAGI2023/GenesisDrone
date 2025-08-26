@@ -34,7 +34,7 @@ def main():
     log_dir = f"logs/{args.exp_name}"
     env_cfg, obs_cfg, reward_cfg, command_cfg, train_cfg, wind_cfg = pickle.load(open(f"logs/{args.exp_name}/cfgs.pkl", "rb"))
     reward_cfg["reward_scales"] = {}
-    wind_cfg["max_value"] = 1e-2
+    wind_cfg["max_value"] = 1e1
 
     if args.vis:
         env_cfg["visualize_target"] = True
