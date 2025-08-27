@@ -3,6 +3,7 @@ import math
 import copy
 import genesis as gs
 from genesis.engine.solvers.rigid.rigid_solver_decomp import RigidSolver
+from PID_Controller import AngularRatePIDController as DronePIDController
 
 from genesis.utils.geom import (
     quat_to_xyz,
@@ -17,7 +18,7 @@ def gs_rand_float(lower, upper, shape, device):
 
 
 class HoverEnv:
-    def __init__(self, num_envs, env_cfg, obs_cfg, reward_cfg, command_cfg, wind_cfg, show_viewer=False):
+    def __init__(self, num_envs, env_cfg, obs_cfg, reward_cfg, command_cfg, wind_cfg, pid_params, show_viewer=False):
         self.num_envs = num_envs
         self.rendered_env_num = min(10, self.num_envs)
         self.num_obs = obs_cfg["num_obs"]
@@ -97,6 +98,14 @@ class HoverEnv:
         self.base_init_quat = torch.tensor(self.env_cfg["base_init_quat"], device=gs.device)
         self.inv_base_init_quat = inv_quat(self.base_init_quat)
         self.drone = self.scene.add_entity(gs.morphs.Drone(file="urdf/cf2x.urdf"))
+
+        # Bodyrates PID Controller
+        self.body_rates_controller = DronePIDController(self.drone, 
+                                                        self.dt, 
+                                                        14468.429183500699, 
+                                                        pid_params=pid_params, 
+                                                        n_envs=num_envs,
+                                                        device=gs.device)
 
         # build scene
         self.scene.build(n_envs=num_envs)
@@ -212,10 +221,16 @@ class HoverEnv:
 
     def step(self, actions):
         self.actions = torch.clip(actions, -self.env_cfg["clip_actions"], self.env_cfg["clip_actions"])
-        exec_actions = self.actions
+        exec_actions = actions.clone().detach()
+        exec_actions[:, :3] *= 10
+        exec_actions[:, 3] *= 10000
 
+        motor_rpms = self.body_rates_controller.update(exec_actions)  # [n_envs, 4]
+        # print(motor_rpms)
+        self.drone.set_propellels_rpm(motor_rpms)
         # 14468 is hover rpm
-        self.drone.set_propellels_rpm((1 + exec_actions * 0.8) * 14468.429183500699)
+        # self.drone.set_propellels_rpm((1 + exec_actions * 0.8) * 14468.429183500699)
+
         # update target pos
         if self.target is not None:
             self.target.set_pos(self.commands, zero_velocity=True)
@@ -256,6 +271,7 @@ class HoverEnv:
         inv_base_quat = inv_quat(self.base_quat)
         self.base_lin_vel[:] = transform_by_quat(self.drone.get_vel(), inv_base_quat)
         self.base_ang_vel[:] = transform_by_quat(self.drone.get_ang(), inv_base_quat)
+        # print(self.drone.get_ang().shape)
 
         if not self.env_cfg["fix_target"]:
             # resample commands

@@ -79,7 +79,7 @@ def get_cfgs():
         "termination_if_y_greater_than": 3.0,
         "termination_if_z_greater_than": 2.0,
         # base pose
-        "base_init_pos": [0.0, 0.0, 1.0],
+        "base_init_pos": [0.0, 0.0, 0.5],
         "base_init_quat": [1.0, 0.0, 0.0, 0.0],
         "episode_length_s": 15.0,
         "at_target_threshold": 0.1,
@@ -117,15 +117,20 @@ def get_cfgs():
         "pos_z_range": [1.0, 1.0],
     }
     wind_cfg = {
-        "max_value": 10.0, # m/s
+        "max_value": 0.0, # m/s
         "min_value": 0.0,
         "update_step": 10,
         "alpha": 0.1, # exponential smoothing
         "seed": 1,
         "allow_vertical_wind": False
     }
+    pid_params = [
+        [10.0, 0.0, 1.0],
+        [10.0, 0.0, 1.0],
+        [2.0, 0.0, 0.2],
+    ]
 
-    return env_cfg, obs_cfg, reward_cfg, command_cfg, wind_cfg
+    return env_cfg, obs_cfg, reward_cfg, command_cfg, wind_cfg, pid_params
 
 
 def main():
@@ -140,7 +145,7 @@ def main():
     gs.init(logging_level=args.log_level)
 
     log_dir = f"logs/{args.exp_name}"
-    env_cfg, obs_cfg, reward_cfg, command_cfg, wind_cfg = get_cfgs()
+    env_cfg, obs_cfg, reward_cfg, command_cfg, wind_cfg, pid_params= get_cfgs()
     train_cfg = get_train_cfg(args.exp_name, args.max_iterations)
 
     if os.path.exists(log_dir):
@@ -151,7 +156,7 @@ def main():
         env_cfg["visualize_target"] = True
 
     pickle.dump(
-        [env_cfg, obs_cfg, reward_cfg, command_cfg, train_cfg, wind_cfg],
+        [env_cfg, obs_cfg, reward_cfg, command_cfg, train_cfg, wind_cfg, pid_params],
         open(f"{log_dir}/cfgs.pkl", "wb"),
     )
 
@@ -162,6 +167,7 @@ def main():
         reward_cfg=reward_cfg,
         command_cfg=command_cfg,
         wind_cfg=wind_cfg,
+        pid_params=pid_params,
         show_viewer=args.vis,
     )
 
