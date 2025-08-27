@@ -13,7 +13,8 @@ try:
             raise ImportError
 except (metadata.PackageNotFoundError, ImportError) as e:
     raise ImportError("Please uninstall 'rsl_rl' and install 'rsl-rl-lib==2.2.4'.") from e
-from rsl_rl.runners import OnPolicyRunner
+# from rsl_rl.runners import OnPolicyRunner
+from MyOnPolicyRunner import OnPolicyRunner
 
 import genesis as gs
 
@@ -61,6 +62,7 @@ def get_train_cfg(exp_name, max_iterations):
         "save_interval": 100,
         "empirical_normalization": None,
         "seed": 1,
+        "save_best": True,
     }
 
     return train_cfg_dict
